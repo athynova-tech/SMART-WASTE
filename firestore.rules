@@ -1,0 +1,122 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if the user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user owns the document by UID
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Helper function to fetch caller user profile data
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    // Helper function to check role
+    function hasRole(role) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        (getUserData().role == role || getUserData().role == 'MUNICIPAL_COMMISSIONER');
+    }
+    
+    function isCommissioner() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        (getUserData().role == 'MUNICIPAL_COMMISSIONER' || getUserData().role == 'commissioner');
+    }
+    
+    function isDriver() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        (getUserData().role == 'DRIVER' || getUserData().role == 'driver');
+    }
+    
+    function isDisposalOfficer() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        (getUserData().role == 'DISPOSAL_OFFICER' || getUserData().role == 'disposal_officer');
+    }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      // Residents, Drivers, and Commercial users can ONLY read and write their own profile; Commissioner can inspect/administer
+      allow read: if isOwner(userId) || isCommissioner();
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isOwner(userId) || isCommissioner();
+      allow delete: if isCommissioner();
+    }
+
+    // --- Driver Applications ---
+    match /driver_applications/{applicationId} {
+      // Drivers can only read their own application; Commissioner can view all applications for review
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || 
+        isCommissioner()
+      );
+      // Applicants can only create an application linked to their own auth UID
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      
+      // Only accounts with a 'commissioner' role can update the 'status' field.
+      // Driver applicants can update their own details (e.g. contact/vehicle info) only if the status field remains unchanged.
+      allow update: if isCommissioner() || (
+        isAuthenticated() && 
+        resource.data.userId == request.auth.uid && 
+        (!('status' in request.resource.data) || request.resource.data.status == resource.data.status)
+      );
+      allow delete: if isCommissioner();
+    }
+
+    // --- OTP Email Verifications ---
+    match /otp_verifications/{email} {
+      // Allow reading and verification during registration / OTP validation
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if isCommissioner();
+    }
+
+    // --- Mail Queue (Firebase Trigger Email Extension) ---
+    match /mail/{mailId} {
+      // Allow creation of outbound email dispatch notifications even during unauthenticated OTP registration
+      allow read: if isAuthenticated();
+      allow create: if true;
+      allow update, delete: if isCommissioner();
+    }
+
+    // --- Waste Collection Reports / Requests ---
+    match /waste_collection_reports/{reportId} {
+      // Residents can read and create their requests; assigned drivers and commissioners can read and update status
+      allow read: if isAuthenticated() && (
+        resource.data.residentId == request.auth.uid || 
+        isDriver() || 
+        isCommissioner() || 
+        isDisposalOfficer()
+      );
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (
+        resource.data.residentId == request.auth.uid || 
+        isDriver() || 
+        isCommissioner() || 
+        isDisposalOfficer()
+      );
+      allow delete: if isCommissioner();
+    }
+
+    // --- Overflowing Bin Hazard Reports & Complaints ---
+    match /overflow_bin_reports/{reportId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isCommissioner() || (isAuthenticated() && resource.data.residentId == request.auth.uid);
+      allow delete: if isCommissioner();
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

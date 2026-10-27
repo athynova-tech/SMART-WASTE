@@ -1,0 +1,6 @@
+{
+  "name": "SmartWaste",
+  "description": "Smart Municipal Waste Management & Collection Platform for residents, drivers, municipal commissioners, and disposal facilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
